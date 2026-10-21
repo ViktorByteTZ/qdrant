@@ -107,7 +107,10 @@ async fn pause_from_env(variable: &str, operation: &str) {
         return;
     };
 
-    let duration = Duration::from_secs_f64(seconds);
+    let Ok(duration) = Duration::try_from_secs_f64(seconds) else {
+        return;
+    };
+
     log::debug!("Staging: pausing {operation} for {duration:?}");
     tokio::time::sleep(duration).await;
 }

@@ -181,5 +181,5 @@ def test_scale_down_abort_replays_after_state_clear_crash(tmp_path: pathlib.Path
 
     wait_for(
         lambda: _replica_state(peer_uris[victim_idx], surviving, receiver_peer)
-        != "ReshardingScaleDown"
+        not in (None, "ReshardingScaleDown")
     )
