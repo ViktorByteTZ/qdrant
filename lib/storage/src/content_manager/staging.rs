@@ -1,7 +1,12 @@
-//! Staging-only operations for testing and debugging purposes.
+//! Staging-only operations and hooks for testing and debugging purposes.
 //!
-//! This module contains operations that are only available when the `staging` feature is enabled.
+//! Available only when the `staging` feature is enabled.
 
+use std::path::Path;
+use std::time::Duration;
+
+use collection::operations::cluster_ops::ReshardingDirection;
+use collection::shards::resharding::{ReshardState, ReshardingStage};
 use collection::shards::shard::PeerId;
 use serde::{Deserialize, Serialize};
 
@@ -65,4 +70,52 @@ impl TestTransientError {
             Ok(())
         }
     }
+}
+
+/// Hold transfer-start application before the sender persists its transfer record
+pub(crate) async fn pause_shard_transfer_start() {
+    pause_from_env(
+        "QDRANT_STAGING_SHARD_TRANSFER_START_DELAY_SEC",
+        "shard transfer start",
+    )
+    .await;
+}
+
+/// Interrupt abort after clearing persisted resharding state, before transfer or replica writes
+pub(crate) async fn after_resharding_state_clear(previous: &ReshardState) {
+    // Finishing resharding clears the same state after committing the read hash ring.
+    if previous.stage >= ReshardingStage::ReadHashRingCommitted {
+        return;
+    }
+
+    // The selected follower must replay a Dead entry with resharding already cleared
+    // and the replica still in ReshardingScaleDown on disk.
+    if previous.direction == ReshardingDirection::Down
+        && std::env::var("QDRANT_STAGING_RESHARDING_CRASH_AFTER_STATE_CLEAR").is_ok()
+        && Path::new("crash_after_resharding_state_clear").exists()
+    {
+        log::debug!("Staging: crashing after clearing scale-down resharding state");
+        std::process::exit(1);
+    }
+
+    // Abort-transfer clears resharding state before stopping and unregistering its transfer.
+    pause_from_env(
+        "QDRANT_STAGING_RESHARDING_ABORT_DELAY_SEC",
+        "resharding abort",
+    )
+    .await;
+}
+
+async fn pause_from_env(variable: &str, operation: &str) {
+    let Ok(seconds) = std::env::var(variable) else {
+        return;
+    };
+
+    let Ok(seconds) = seconds.parse::<f64>() else {
+        return;
+    };
+
+    let duration = Duration::from_secs_f64(seconds);
+    log::debug!("Staging: pausing {operation} for {duration:?}");
+    tokio::time::sleep(duration).await;
 }

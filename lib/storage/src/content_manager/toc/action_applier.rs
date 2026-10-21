@@ -395,10 +395,22 @@ impl TableOfContent {
             Action::SetReshardingState { collection, state } => {
                 let collection = self.get_collection_unchecked(collection).await?;
                 let shard_holder = collection.shards_holder();
-                shard_holder
-                    .write()
-                    .await
-                    .set_resharding_state(state.clone())?;
+
+                let mut shard_holder = shard_holder.write().await;
+
+                #[cfg(feature = "staging")]
+                let previous = shard_holder.resharding_state();
+
+                shard_holder.set_resharding_state(state.clone())?;
+                drop(shard_holder);
+
+                #[cfg(feature = "staging")]
+                if state.is_none()
+                    && let Some(previous) = previous
+                {
+                    // Readers must see the persisted state while the test pauses application.
+                    crate::content_manager::staging::after_resharding_state_clear(&previous).await;
+                }
 
                 Ok(())
             }
@@ -435,6 +447,12 @@ impl TableOfContent {
                 collection,
                 transfer,
             } => {
+                // Pause before the first transfer write so restart must replay the start entry.
+                #[cfg(feature = "staging")]
+                if self.this_peer_id == transfer.from {
+                    crate::content_manager::staging::pause_shard_transfer_start().await;
+                }
+
                 let collection = self.get_collection_unchecked(collection).await?;
                 let shard_holder = collection.shards_holder();
                 shard_holder
